@@ -5,6 +5,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+import time
 
 app = Flask(__name__)
 CORS(app)
@@ -65,6 +66,9 @@ def scrape_html():
     driver = get_driver()
     try:
         driver.get(data['url'])
+        wait_seconds = data.get('wait', 0)
+        if wait_seconds:
+            time.sleep(wait_seconds)
         result = scrape_single(driver, data['selector'])
         if 'error' in result:
             return jsonify({"success": False, "error": result['error']}), 500
@@ -90,6 +94,9 @@ def scrape_text():
     driver = get_driver()
     try:
         driver.get(data['url'])
+        wait_seconds = data.get('wait', 0)
+        if wait_seconds:
+            time.sleep(wait_seconds)
         result = scrape_single(driver, data['selector'])
         if 'error' in result:
             return jsonify({"success": False, "error": result['error']}), 500
@@ -135,6 +142,9 @@ def scrape_multi():
     driver = get_driver()
     try:
         driver.get(data['url'])
+        wait_seconds = data.get('wait', 0)
+        if wait_seconds:
+            time.sleep(wait_seconds)
         # Wait for first selector to ensure page is loaded
         WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, selectors[0]))
