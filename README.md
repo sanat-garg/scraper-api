@@ -38,14 +38,16 @@ Returns the `outerHTML` and `innerHTML` of a single element.
 ```json
 {
   "url": "https://www.example.com/page",
-  "selector": "#app > div.content"
+  "selector": "#app > div.content",
+  "wait": 3
 }
 ```
 
-| Field      | Type   | Required | Description                        |
-|------------|--------|----------|------------------------------------|
-| `url`      | string | ✅       | Full URL of the page to scrape     |
-| `selector` | string | ✅       | CSS selector of the target element |
+| Field      | Type   | Required | Description                                              |
+|------------|--------|----------|----------------------------------------------------------|
+| `url`      | string | ✅       | Full URL of the page to scrape                           |
+| `selector` | string | ✅       | CSS selector of the target element                       |
+| `wait`     | number | ❌       | Seconds to wait after page load before scraping (default: 0) |
 
 **Success Response (200):**
 ```json
@@ -78,14 +80,16 @@ Returns only the visible `innerText` of a single element (no HTML tags).
 ```json
 {
   "url": "https://www.example.com/page",
-  "selector": ".product-title"
+  "selector": ".product-title",
+  "wait": 3
 }
 ```
 
-| Field      | Type   | Required | Description                        |
-|------------|--------|----------|------------------------------------|
-| `url`      | string | ✅       | Full URL of the page to scrape     |
-| `selector` | string | ✅       | CSS selector of the target element |
+| Field      | Type   | Required | Description                                              |
+|------------|--------|----------|----------------------------------------------------------|
+| `url`      | string | ✅       | Full URL of the page to scrape                           |
+| `selector` | string | ✅       | CSS selector of the target element                       |
+| `wait`     | number | ❌       | Seconds to wait after page load before scraping (default: 0) |
 
 **Success Response (200):**
 ```json
@@ -113,14 +117,16 @@ Loads the page **once** and scrapes multiple elements. More efficient than multi
     ".product-title",
     ".product-price",
     ".reviews-section"
-  ]
+  ],
+  "wait": 5
 }
 ```
 
-| Field       | Type     | Required | Description                             |
-|-------------|----------|----------|-----------------------------------------|
-| `url`       | string   | ✅       | Full URL of the page to scrape          |
-| `selectors` | string[] | ✅       | Array of CSS selectors to extract       |
+| Field       | Type     | Required | Description                                              |
+|-------------|----------|----------|----------------------------------------------------------|
+| `url`       | string   | ✅       | Full URL of the page to scrape                           |
+| `selectors` | string[] | ✅       | Array of CSS selectors to extract                        |
+| `wait`      | number   | ❌       | Seconds to wait after page load before scraping (default: 0) |
 
 **Success Response (200):**
 ```json
@@ -156,6 +162,28 @@ Each result object includes:
 
 ---
 
+## The `wait` Parameter
+
+Some pages load content asynchronously via JavaScript after the initial page load. If your target element isn't available immediately, add `"wait": N` to your request to wait N seconds after page load before attempting to scrape.
+
+**When to use it:**
+- Page shows a loading spinner before content appears
+- Content is loaded via AJAX after page load
+- Elements are rendered by lazy-loading JavaScript
+
+**Example:**
+```json
+{
+  "url": "https://www.nykaa.com/product/reviews",
+  "selector": ".reviews-list",
+  "wait": 3
+}
+```
+
+This loads the page, waits 3 seconds for JS to finish rendering, then looks for the `.reviews-list` element.
+
+---
+
 ## Usage Examples
 
 ### cURL
@@ -166,15 +194,20 @@ curl -X POST http://93.127.172.192:1777/scrape/html \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.nykaa.com/product-page/reviews/123", "selector": "div.reviews"}'
 
+# Single HTML with wait
+curl -X POST http://93.127.172.192:1777/scrape/html \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://www.nykaa.com/product-page/reviews/123", "selector": "div.reviews", "wait": 3}'
+
 # Single Text
 curl -X POST http://93.127.172.192:1777/scrape/text \
   -H "Content-Type: application/json" \
   -d '{"url": "https://www.nykaa.com/product-page", "selector": "h1.title"}'
 
-# Multiple elements
+# Multiple elements with wait
 curl -X POST http://93.127.172.192:1777/scrape/multi \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://www.nykaa.com/product-page", "selectors": ["h1.title", ".price", ".rating"]}'
+  -d '{"url": "https://www.nykaa.com/product-page", "selectors": ["h1.title", ".price", ".rating"], "wait": 5}'
 ```
 
 ### JavaScript (fetch)
@@ -185,7 +218,8 @@ const res = await fetch('http://93.127.172.192:1777/scrape/html', {
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
     url: 'https://www.nykaa.com/product',
-    selector: '.product-info'
+    selector: '.product-info',
+    wait: 3
   })
 });
 const data = await res.json();
@@ -198,7 +232,8 @@ console.log(data.outerHTML);
 <?php
 $payload = json_encode([
     'url' => 'https://www.nykaa.com/product',
-    'selectors' => ['.title', '.price', '.reviews']
+    'selectors' => ['.title', '.price', '.reviews'],
+    'wait' => 3
 ]);
 
 $ch = curl_init('http://93.127.172.192:1777/scrape/multi');
@@ -223,7 +258,8 @@ import requests
 
 res = requests.post('http://93.127.172.192:1777/scrape/multi', json={
     'url': 'https://www.nykaa.com/product',
-    'selectors': ['.title', '.price', '.rating']
+    'selectors': ['.title', '.price', '.rating'],
+    'wait': 3
 })
 
 for item in res.json()['results']:
@@ -234,11 +270,12 @@ for item in res.json()['results']:
 
 ## Notes
 
-- **Timeout:** Requests may take 10-20 seconds. The API waits up to 15s for elements to appear on the page. Set your client timeout to at least 120s.
+- **Timeout:** Requests may take 10-20 seconds (more with `wait`). The API waits up to 15s for elements to appear on the page. Set your client timeout to at least 120s.
 - **JS-rendered pages:** Fully supported. The API uses headless Chrome so JavaScript-heavy SPAs (React, Next.js, etc.) work fine.
 - **CSS Selectors:** Use your browser's DevTools → right-click element → "Copy selector" to get the exact selector.
 - **CORS:** Enabled for all origins. Can be called from any frontend.
 - **Rate limiting:** None currently. Be reasonable with requests — each one spins up a Chrome instance.
+- **Wait parameter:** Use `"wait": N` for slow-loading pages. Adds N seconds delay after page load before scraping.
 
 ---
 
