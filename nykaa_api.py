@@ -3,9 +3,6 @@ from flask_cors import CORS
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 import time
 
 app = Flask(__name__)
@@ -28,23 +25,55 @@ def get_driver():
     return webdriver.Chrome(options=options, service=service)
 
 
-def scrape_single(driver, css_selector):
-    """Scrape a single selector from an already-loaded page."""
-    try:
-        element = WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, css_selector))
+def check_for_block(driver):
+    """Detect if the page is a CAPTCHA/bot-block page."""
+    blocked = driver.execute_script('''
+        var body = document.body ? document.body.innerHTML : '';
+        if (body.includes('validateCaptcha') || body.includes('robot') || 
+            body.includes('captcha') || body.includes('blocked')) {
+            return true;
+        }
+        return false;
+    ''')
+    return blocked
+
+
+def scrape_elements_js(driver, selectors):
+    """Use JavaScript to find elements — avoids ChromeDriver crash on complex pages."""
+    results = []
+    for selector in selectors:
+        result = driver.execute_script('''
+            var el = document.querySelector(arguments[0]);
+            if (el) {
+                return {
+                    selector: arguments[0],
+                    outerHTML: el.outerHTML,
+                    innerHTML: el.innerHTML,
+                    text: el.innerText || el.textContent || ''
+                };
+            }
+            return null;
+        ''', selector)
+
+        if result:
+            results.append(result)
+        else:
+            results.append({"selector": selector, "error": "Element not found"})
+
+    return results
+
+
+def wait_for_selector_js(driver, selector, timeout=15):
+    """Poll for an element using JS instead of WebDriverWait."""
+    end_time = time.time() + timeout
+    while time.time() < end_time:
+        found = driver.execute_script(
+            'return document.querySelector(arguments[0]) !== null;', selector
         )
-        return {
-            "selector": css_selector,
-            "outerHTML": element.get_attribute("outerHTML"),
-            "innerHTML": element.get_attribute("innerHTML"),
-            "text": element.text
-        }
-    except Exception as e:
-        return {
-            "selector": css_selector,
-            "error": str(e)
-        }
+        if found:
+            return True
+        time.sleep(0.5)
+    return False
 
 
 # ── Health check ─────────────────────────────────────────────────────────────
@@ -69,9 +98,19 @@ def scrape_html():
         wait_seconds = data.get('wait', 0)
         if wait_seconds:
             time.sleep(wait_seconds)
-        result = scrape_single(driver, data['selector'])
+
+        if check_for_block(driver):
+            return jsonify({"success": False, "error": "Page blocked by anti-bot protection (CAPTCHA). Try again later or use a different IP."}), 403
+
+        selector = data['selector']
+        if not wait_for_selector_js(driver, selector):
+            return jsonify({"success": False, "error": f"Element not found: {selector}"}), 404
+
+        results = scrape_elements_js(driver, [selector])
+        result = results[0]
         if 'error' in result:
-            return jsonify({"success": False, "error": result['error']}), 500
+            return jsonify({"success": False, "error": result['error']}), 404
+
         return jsonify({
             "success": True,
             "outerHTML": result['outerHTML'],
@@ -102,9 +141,19 @@ def scrape_text():
         wait_seconds = data.get('wait', 0)
         if wait_seconds:
             time.sleep(wait_seconds)
-        result = scrape_single(driver, data['selector'])
+
+        if check_for_block(driver):
+            return jsonify({"success": False, "error": "Page blocked by anti-bot protection (CAPTCHA). Try again later or use a different IP."}), 403
+
+        selector = data['selector']
+        if not wait_for_selector_js(driver, selector):
+            return jsonify({"success": False, "error": f"Element not found: {selector}"}), 404
+
+        results = scrape_elements_js(driver, [selector])
+        result = results[0]
         if 'error' in result:
-            return jsonify({"success": False, "error": result['error']}), 500
+            return jsonify({"success": False, "error": result['error']}), 404
+
         return jsonify({
             "success": True,
             "text": result['text']
@@ -138,15 +187,14 @@ def scrape_multi():
         wait_seconds = data.get('wait', 0)
         if wait_seconds:
             time.sleep(wait_seconds)
-        # Wait for first selector to ensure page is loaded
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, selectors[0]))
-        )
 
-        results = []
-        for selector in selectors:
-            results.append(scrape_single(driver, selector))
+        if check_for_block(driver):
+            return jsonify({"success": False, "error": "Page blocked by anti-bot protection (CAPTCHA). Try again later or use a different IP."}), 403
 
+        # Wait for at least the first selector
+        wait_for_selector_js(driver, selectors[0])
+
+        results = scrape_elements_js(driver, selectors)
         return jsonify({"success": True, "results": results})
 
     except Exception as e:
