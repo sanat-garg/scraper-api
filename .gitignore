@@ -1,0 +1,7 @@
+vendor/
+composer.lock
+composer.json
+__pycache__/
+*.pyc
+/tmp/
+nykaa_cookies.txt
