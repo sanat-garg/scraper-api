@@ -6,9 +6,24 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import time
+import threading
+import subprocess
+import os
 
 app = Flask(__name__)
 CORS(app)
+
+# Limit to 1 Chrome instance at a time to prevent memory crashes
+scrape_lock = threading.Lock()
+
+
+def kill_zombie_chromes():
+    """Kill any leftover Chrome/chromedriver processes."""
+    try:
+        subprocess.run(['pkill', '-f', 'chrome'], capture_output=True)
+        time.sleep(1)
+    except Exception:
+        pass
 
 
 def get_driver():
@@ -20,13 +35,30 @@ def get_driver():
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-software-rasterizer")
     options.add_argument("--disable-extensions")
-    options.add_argument("--remote-debugging-port=9222")
+    options.add_argument("--disable-background-networking")
+    options.add_argument("--disable-default-apps")
+    options.add_argument("--disable-sync")
+    options.add_argument("--disable-translate")
+    options.add_argument("--no-first-run")
     options.add_argument("--window-size=1920,1080")
     options.add_argument(
         "user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
     return webdriver.Chrome(options=options)
+
+
+def create_driver_with_retry(max_retries=2):
+    """Try to create a Chrome driver, retry if it crashes."""
+    for attempt in range(max_retries):
+        try:
+            return get_driver()
+        except Exception as e:
+            if attempt < max_retries - 1:
+                kill_zombie_chromes()
+                time.sleep(2)
+            else:
+                raise e
 
 
 def scrape_single(driver, css_selector):
@@ -63,24 +95,30 @@ def scrape_html():
     if not data or 'url' not in data or 'selector' not in data:
         return jsonify({"success": False, "error": "Both 'url' and 'selector' are required"}), 400
 
-    driver = get_driver()
-    try:
-        driver.get(data['url'])
-        wait_seconds = data.get('wait', 0)
-        if wait_seconds:
-            time.sleep(wait_seconds)
-        result = scrape_single(driver, data['selector'])
-        if 'error' in result:
-            return jsonify({"success": False, "error": result['error']}), 500
-        return jsonify({
-            "success": True,
-            "outerHTML": result['outerHTML'],
-            "innerHTML": result['innerHTML']
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-    finally:
-        driver.quit()
+    with scrape_lock:
+        driver = None
+        try:
+            driver = create_driver_with_retry()
+            driver.get(data['url'])
+            wait_seconds = data.get('wait', 0)
+            if wait_seconds:
+                time.sleep(wait_seconds)
+            result = scrape_single(driver, data['selector'])
+            if 'error' in result:
+                return jsonify({"success": False, "error": result['error']}), 500
+            return jsonify({
+                "success": True,
+                "outerHTML": result['outerHTML'],
+                "innerHTML": result['innerHTML']
+            })
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
 
 
 # ── /scrape/text  →  returns innerText (single selector) ─────────────────────
@@ -91,46 +129,35 @@ def scrape_text():
     if not data or 'url' not in data or 'selector' not in data:
         return jsonify({"success": False, "error": "Both 'url' and 'selector' are required"}), 400
 
-    driver = get_driver()
-    try:
-        driver.get(data['url'])
-        wait_seconds = data.get('wait', 0)
-        if wait_seconds:
-            time.sleep(wait_seconds)
-        result = scrape_single(driver, data['selector'])
-        if 'error' in result:
-            return jsonify({"success": False, "error": result['error']}), 500
-        return jsonify({
-            "success": True,
-            "text": result['text']
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-    finally:
-        driver.quit()
+    with scrape_lock:
+        driver = None
+        try:
+            driver = create_driver_with_retry()
+            driver.get(data['url'])
+            wait_seconds = data.get('wait', 0)
+            if wait_seconds:
+                time.sleep(wait_seconds)
+            result = scrape_single(driver, data['selector'])
+            if 'error' in result:
+                return jsonify({"success": False, "error": result['error']}), 500
+            return jsonify({
+                "success": True,
+                "text": result['text']
+            })
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
 
 
 # ── /scrape/multi  →  multiple selectors from the same page ───────────────────
 
 @app.route('/scrape/multi', methods=['POST'])
 def scrape_multi():
-    """
-    Request body:
-    {
-        "url": "https://example.com",
-        "selectors": ["#title", ".price", "div.reviews"]
-    }
-
-    Response:
-    {
-        "success": true,
-        "results": [
-            {"selector": "#title", "outerHTML": "...", "innerHTML": "...", "text": "..."},
-            {"selector": ".price", "outerHTML": "...", "innerHTML": "...", "text": "..."},
-            {"selector": "div.reviews", "error": "element not found..."}
-        ]
-    }
-    """
     data = request.get_json()
     if not data or 'url' not in data or 'selectors' not in data:
         return jsonify({"success": False, "error": "'url' and 'selectors' (array) are required"}), 400
@@ -139,27 +166,33 @@ def scrape_multi():
     if not isinstance(selectors, list) or len(selectors) == 0:
         return jsonify({"success": False, "error": "'selectors' must be a non-empty array"}), 400
 
-    driver = get_driver()
-    try:
-        driver.get(data['url'])
-        wait_seconds = data.get('wait', 0)
-        if wait_seconds:
-            time.sleep(wait_seconds)
-        # Wait for first selector to ensure page is loaded
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, selectors[0]))
-        )
+    with scrape_lock:
+        driver = None
+        try:
+            driver = create_driver_with_retry()
+            driver.get(data['url'])
+            wait_seconds = data.get('wait', 0)
+            if wait_seconds:
+                time.sleep(wait_seconds)
+            # Wait for first selector to ensure page is loaded
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, selectors[0]))
+            )
 
-        results = []
-        for selector in selectors:
-            results.append(scrape_single(driver, selector))
+            results = []
+            for selector in selectors:
+                results.append(scrape_single(driver, selector))
 
-        return jsonify({"success": True, "results": results})
+            return jsonify({"success": True, "results": results})
 
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-    finally:
-        driver.quit()
+        except Exception as e:
+            return jsonify({"success": False, "error": str(e)}), 500
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
 
 
 if __name__ == '__main__':
